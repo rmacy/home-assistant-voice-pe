@@ -338,7 +338,12 @@ binary_sensor:
                     else:
                       - if:
                           condition:
-                            voice_assistant.is_running:
+                            and:
+                              - voice_assistant.is_running:
+                              # Streaming wake-word audio keeps the component running while
+                              # idle. A single press in that state must start a manual Assist
+                              # turn, not merely cancel the stream.
+                              - lambda: 'return id(voice_assistant_phase) != ${voice_assist_idle_phase_id};'
                           then:
                             - script.execute: interrupt_voice_assistant
                           else:
@@ -363,14 +368,14 @@ binary_sensor:
                                             condition:
                                               and:
                                                 - switch.is_off: master_mute_switch
-                                                - not: voice_assistant.is_running
+                                                - lambda: 'return id(voice_assistant_phase) == ${voice_assist_idle_phase_id};'
                                             then:
                                               - script.execute:
                                                   id: play_sound
                                                   priority: true
                                                   sound_file: "center_button_press_sound"
                                               - delay: 300ms
-                                              - voice_assistant.start:
+                                              - script.execute: start_manual_assist
       # Double Click
       #  . Exposed as an event entity. To be used in automations inside Home Assistant
       - timing:
@@ -1563,6 +1568,22 @@ script:
                   - voice_assistant.start_continuous:
           else:
             - lambda: id(va).set_use_wake_word(false);
+
+  # Convert a center-button press into a normal VAD Assist turn when idle
+  # streaming is enabled. The stream is stopped first so the one-shot request
+  # cannot race it; return_to_idle restores server-side wake-word streaming.
+  - id: start_manual_assist
+    mode: restart
+    then:
+      - voice_assistant.stop:
+      - wait_until:
+          condition:
+            not:
+              voice_assistant.is_running:
+          timeout: 2s
+      - lambda: id(va).set_use_wake_word(false);
+      - voice_assistant.start:
+          silence_detection: true
 
   # Single end-of-interaction cleanup, shared by on_end (normal completion) and
   # interrupt_voice_assistant (aborts): un-duck media, return to the idle phase, refresh the
