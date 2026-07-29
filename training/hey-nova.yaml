@@ -1,0 +1,38 @@
+# Reproducible local openWakeWord training profile for Home Assistant Voice PE.
+# The deployed detector listens for the phrase "Hey Nova" on the LAN only.
+model_name: hey_nova
+target_phrase:
+  - "hey nova"
+custom_negative_phrases:
+  - "hey noah"
+  - "hey nora"
+  - "hey nova model"
+
+# openWakeWord recommends at least 20,000 synthetic positive examples for a
+# practical model. This profile uses 25,000, then relies on real-room testing
+# and threshold tuning before deployment.
+n_samples: 25000
+n_samples_val: 5000
+tts_batch_size: 50
+augmentation_batch_size: 16
+piper_sample_generator_path: /opt/openwakeword-nova/piper-sample-generator
+output_dir: /opt/openwakeword-nova/output
+rir_paths:
+  - /opt/openwakeword-nova/mit_rirs
+background_paths:
+  - /opt/openwakeword-nova/background_clips
+background_paths_duplication_rate:
+  - 1
+false_positive_validation_data_path: /opt/openwakeword-nova/validation_set_features.npy
+augmentation_rounds: 1
+feature_data_files:
+  ACAV100M_sample: /opt/openwakeword-nova/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+batch_n_per_class:
+  ACAV100M_sample: 1024
+  adversarial_negative: 50
+  positive: 50
+model_type: dnn
+layer_size: 32
+steps: 50000
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
