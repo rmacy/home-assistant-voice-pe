@@ -16,6 +16,10 @@ substitutions:
   voice_assist_error_phase_id: '11'
   # Change this to true in case you ahve a hidden SSID at home.
   hidden_ssid: "false"
+  # This custom firmware uses Home Assistant's local streaming wake-word
+  # engine by default. Set to "On device" for the upstream microWakeWord
+  # fallback, which remains available as an OTA recovery path.
+  wake_word_engine_location_default: "In Home Assistant"
   # Substitutions for audio files
   jack_connected_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/jack_connected.flac
   jack_disconnected_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/jack_disconnected.flac
@@ -1924,7 +1928,7 @@ select:
     options:
       - In Home Assistant
       - On device
-    initial_option: On device
+    initial_option: ${wake_word_engine_location_default}
     on_value:
       - if:
           condition:
