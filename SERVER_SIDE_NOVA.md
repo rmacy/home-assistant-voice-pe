@@ -38,3 +38,12 @@ through and retains 0.6 seconds of audio when wake detection hands the stream
 to STT. This firmware uses noise suppression level 2, neutral automatic gain,
 and a 1x input multiplier. Reapply and validate the Core patch after every
 Home Assistant Core upgrade until upstream provides equivalent behavior.
+
+The production provider is the local Home Assistant app **Nova
+openWakeWord** (`local_nova_openwakeword`), built from the official
+`homeassistant/amd64-addon-openwakeword:2.1.0` image. Its first-stage
+`hey_nova` threshold is `0.01`; only candidates are verified by the private
+inference2 Faster-Whisper service before a Wyoming detection is emitted. The
+Gemma pipeline selects `wake_word.openwakeword_2` / `hey_nova`. The official
+`core_openwakeword` app remains installed, stopped, and set to manual boot as
+the rollback provider.
