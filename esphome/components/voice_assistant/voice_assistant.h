@@ -24,6 +24,7 @@
 #endif
 #include "esphome/components/socket/socket.h"
 
+#include <atomic>
 #include <span>
 #include <vector>
 
@@ -336,6 +337,9 @@ class VoiceAssistant : public Component {
   // When a shared microphone remains active for another consumer (such as
   // microWakeWord), discard buffered reply audio before a follow-up pipeline.
   uint32_t followup_flush_started_{0};
+  std::atomic<bool> followup_acoustic_guard_active_{false};
+  std::atomic<uint32_t> followup_last_loud_at_{0};
+  std::atomic<uint32_t> followup_peak_seen_{0};
 
   bool use_wake_word_;
   uint8_t noise_suppression_level_;

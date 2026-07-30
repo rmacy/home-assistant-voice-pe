@@ -32,18 +32,48 @@ static const size_t SPEAKER_BUFFER_SIZE = 16 * RECEIVE_SIZE;
 // SEND_BUFFER_SAMPLES (32 ms), so this is far longer than any legitimate gap between chunks.
 static const uint32_t AUDIO_CHANNEL_STALL_TIMEOUT_MS = 2000;
 
-// The media player reports that an announcement is finished slightly before
-// the Voice PE's mixer and physical speaker are acoustically quiet. Starting a
-// follow-up turn immediately can feed the tail of Nova's response back into
-// STT. Hold the microphone closed long enough for the measured mixer tail to
-// drain before continuing the conversation.
-static const uint32_t FOLLOWUP_GUARD_MS = 750;
-static const uint32_t FOLLOWUP_FLUSH_MS = 500;
+// The media player and decoder state can get ahead of the physical speaker.
+// Start the follow-up microphone only after a short scheduling guard, then
+// discard samples until the room has actually been quiet. This prevents Nova's
+// own last sentence from becoming the next user turn without imposing a long
+// fixed delay on every conversation.
+static const uint32_t FOLLOWUP_GUARD_MS = 250;
+static const uint32_t FOLLOWUP_MIN_FLUSH_MS = 200;
+static const uint32_t FOLLOWUP_QUIET_MS = 350;
+static const uint32_t FOLLOWUP_MAX_FLUSH_MS = 3000;
+static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 450;
+static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 2200;
+
+// If the media player never publishes a useful state transition, wait for the
+// duration inferred from the TTS text plus decoder/startup headroom rather than
+// declaring playback complete after two seconds.
+static const uint32_t PLAYBACK_TIMEOUT_HEADROOM_MS = 1500;
 
 VoiceAssistant::VoiceAssistant() { global_voice_assistant = this; }
 
 void VoiceAssistant::setup() {
   this->mic_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
+    if (this->followup_acoustic_guard_active_.load(std::memory_order_relaxed) && data.size() >= 2) {
+      uint64_t absolute_sum = 0;
+      uint32_t peak = 0;
+      size_t sample_count = data.size() / 2;
+      for (size_t index = 0; index + 1 < data.size(); index += 2) {
+        int16_t sample = static_cast<int16_t>(static_cast<uint16_t>(data[index]) |
+                                              (static_cast<uint16_t>(data[index + 1]) << 8));
+        uint32_t magnitude = sample < 0 ? static_cast<uint32_t>(-static_cast<int32_t>(sample))
+                                        : static_cast<uint32_t>(sample);
+        absolute_sum += magnitude;
+        peak = std::max(peak, magnitude);
+      }
+      uint32_t average = static_cast<uint32_t>(absolute_sum / sample_count);
+      if (average >= FOLLOWUP_LOUD_AVERAGE_THRESHOLD || peak >= FOLLOWUP_LOUD_PEAK_THRESHOLD) {
+        this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
+      }
+      uint32_t previous_peak = this->followup_peak_seen_.load(std::memory_order_relaxed);
+      if (peak > previous_peak) {
+        this->followup_peak_seen_.store(peak, std::memory_order_relaxed);
+      }
+    }
     std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer_.lock();
     if (temp_ring_buffer != nullptr) {
       temp_ring_buffer->write((void *) data.data(), data.size());
@@ -541,6 +571,9 @@ void VoiceAssistant::loop() {
         this->set_timeout("followup-guard", FOLLOWUP_GUARD_MS, [this]() {
           if (this->state_ == State::FOLLOWUP_DELAY && this->continue_conversation_) {
             this->followup_flush_started_ = 0;
+            this->followup_peak_seen_.store(0, std::memory_order_relaxed);
+            this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
+            this->followup_acoustic_guard_active_.store(true, std::memory_order_release);
             this->set_state_(State::START_MICROPHONE, State::FOLLOWUP_FLUSH);
           }
         });
@@ -558,8 +591,22 @@ void VoiceAssistant::loop() {
       this->clear_buffers_();
       if (this->followup_flush_started_ == 0) {
         this->followup_flush_started_ = millis();
-        ESP_LOGD(TAG, "Flushing follow-up microphone for %u ms", FOLLOWUP_FLUSH_MS);
-      } else if ((millis() - this->followup_flush_started_) >= FOLLOWUP_FLUSH_MS) {
+        this->followup_last_loud_at_.store(this->followup_flush_started_, std::memory_order_relaxed);
+        ESP_LOGD(TAG, "Waiting for an acoustically quiet follow-up window");
+      } else {
+        uint32_t now = millis();
+        uint32_t elapsed = now - this->followup_flush_started_;
+        uint32_t quiet_for = now - this->followup_last_loud_at_.load(std::memory_order_relaxed);
+        bool acoustically_quiet = elapsed >= FOLLOWUP_MIN_FLUSH_MS && quiet_for >= FOLLOWUP_QUIET_MS;
+        bool guard_expired = elapsed >= FOLLOWUP_MAX_FLUSH_MS;
+        if (!acoustically_quiet && !guard_expired) {
+          break;
+        }
+        uint32_t peak_seen = this->followup_peak_seen_.load(std::memory_order_relaxed);
+        ESP_LOGD(TAG, "Follow-up acoustic guard released after %" PRIu32
+                      " ms (%" PRIu32 " ms quiet, peak %" PRIu32 ", forced=%s)",
+                 elapsed, quiet_for, peak_seen, YESNO(guard_expired));
+        this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
         this->followup_flush_started_ = 0;
         this->clear_buffers_();
         this->set_state_(State::START_PIPELINE, State::START_PIPELINE);
@@ -787,6 +834,7 @@ void VoiceAssistant::request_stop() {
       this->set_state_(State::IDLE, State::IDLE);
       break;
     case State::FOLLOWUP_FLUSH:
+      this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
       this->followup_flush_started_ = 0;
       this->set_state_(State::STOP_MICROPHONE, State::IDLE);
       break;
@@ -805,7 +853,13 @@ void VoiceAssistant::signal_stop_() {
 }
 
 void VoiceAssistant::start_playback_timeout_() {
-  this->set_timeout("playing", 2000, [this]() {
+  uint32_t timeout_ms = 2000;
+#ifdef USE_MEDIA_PLAYER
+  if (this->media_player_ != nullptr && this->tts_estimated_duration_ms_ > 0) {
+    timeout_ms = this->tts_estimated_duration_ms_ + PLAYBACK_TIMEOUT_HEADROOM_MS;
+  }
+#endif
+  this->set_timeout("playing", timeout_ms, [this]() {
     this->cancel_timeout("speaker-timeout");
     this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
 
