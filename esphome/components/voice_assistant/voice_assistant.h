@@ -108,6 +108,7 @@ enum class MediaPlayerResponseState {
   IDLE,
   URL_SENT,
   PLAYING,
+  DRAINING,
   FINISHED,
 };
 #endif
@@ -307,6 +308,8 @@ class VoiceAssistant : public Component {
   bool started_streaming_tts_{false};
 
   MediaPlayerResponseState media_player_response_state_{MediaPlayerResponseState::IDLE};
+  uint32_t tts_estimated_duration_ms_{0};
+  uint32_t tts_playback_started_at_{0};
 #endif
 
   bool local_output_{false};

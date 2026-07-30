@@ -68,12 +68,22 @@ void VoiceAssistant::setup() {
           if (this->media_player_response_state_ == MediaPlayerResponseState::URL_SENT) {
             // State changed to announcing after receiving the url
             this->media_player_response_state_ = MediaPlayerResponseState::PLAYING;
+            this->tts_playback_started_at_ = millis();
           }
           break;
         default:
           if (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING) {
-            // No longer announcing the TTS response
-            this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+            // The media player's decoder can report idle before all audible
+            // Chatterbox audio reaches the Voice PE speaker. Hold the response
+            // for a conservative duration estimated from the TTS text.
+            uint32_t elapsed = millis() - this->tts_playback_started_at_;
+            if (elapsed >= this->tts_estimated_duration_ms_) {
+              this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+            } else {
+              this->media_player_response_state_ = MediaPlayerResponseState::DRAINING;
+              ESP_LOGD(TAG, "Announcement decoder ended early; holding for %" PRIu32 " ms",
+                       this->tts_estimated_duration_ms_ - elapsed);
+            }
           }
           break;
       }
@@ -475,10 +485,17 @@ void VoiceAssistant::loop() {
 #endif
 #ifdef USE_MEDIA_PLAYER
       if (this->media_player_ != nullptr) {
-        playing = (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING);
+        if (this->media_player_response_state_ == MediaPlayerResponseState::DRAINING &&
+            (millis() - this->tts_playback_started_at_) >= this->tts_estimated_duration_ms_) {
+          this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
+        }
+        playing = (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING ||
+                   this->media_player_response_state_ == MediaPlayerResponseState::DRAINING);
 
         if (this->media_player_response_state_ == MediaPlayerResponseState::FINISHED) {
           this->media_player_response_state_ = MediaPlayerResponseState::IDLE;
+          this->tts_estimated_duration_ms_ = 0;
+          this->tts_playback_started_at_ = 0;
           this->cancel_timeout("playing");
           ESP_LOGD(TAG, "Announcement finished playing");
           this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
@@ -894,6 +911,33 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
         ESP_LOGW(TAG, "No text in TTS_START event");
         return;
       }
+#ifdef USE_MEDIA_PLAYER
+      if (this->media_player_ != nullptr) {
+        size_t word_count = 0;
+        bool in_word = false;
+        for (unsigned char character : text) {
+          bool is_word_character =
+              (character >= '0' && character <= '9') || (character >= 'A' && character <= 'Z') ||
+              (character >= 'a' && character <= 'z') || character >= 0x80;
+          if (is_word_character && !in_word) {
+            word_count++;
+          }
+          in_word = is_word_character;
+        }
+        // Chatterbox varies from roughly 250-750 ms per spoken word. Four
+        // hundred ms plus a fixed tail is conservative for normal English and
+        // proper-name-heavy homelab responses without making follow-ups sluggish.
+        uint32_t estimate = 500 + static_cast<uint32_t>(word_count) * 400;
+        if (estimate < 1800) {
+          estimate = 1800;
+        } else if (estimate > 60000) {
+          estimate = 60000;
+        }
+        this->tts_estimated_duration_ms_ = estimate;
+        this->tts_playback_started_at_ = 0;
+        ESP_LOGD(TAG, "Estimated TTS playback duration: %" PRIu32 " ms (%zu words)", estimate, word_count);
+      }
+#endif
       if (text.length() > 500) {
         text.resize(497);
         text += "...";
