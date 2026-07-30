@@ -339,6 +339,7 @@ class VoiceAssistant : public Component {
   uint32_t followup_flush_started_{0};
   std::atomic<bool> followup_acoustic_guard_active_{false};
   std::atomic<uint32_t> followup_last_loud_at_{0};
+  std::atomic<uint32_t> followup_average_seen_{0};
   std::atomic<uint32_t> followup_peak_seen_{0};
 
   bool use_wake_word_;

@@ -40,9 +40,9 @@ static const uint32_t AUDIO_CHANNEL_STALL_TIMEOUT_MS = 2000;
 static const uint32_t FOLLOWUP_GUARD_MS = 250;
 static const uint32_t FOLLOWUP_MIN_FLUSH_MS = 200;
 static const uint32_t FOLLOWUP_QUIET_MS = 350;
-static const uint32_t FOLLOWUP_MAX_FLUSH_MS = 3000;
-static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 450;
-static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 2200;
+static const uint32_t FOLLOWUP_MAX_FLUSH_MS = 12000;
+static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 1500;
+static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 10000;
 
 // If the media player never publishes a useful state transition, wait for the
 // duration inferred from the TTS text plus decoder/startup headroom rather than
@@ -68,6 +68,10 @@ void VoiceAssistant::setup() {
       uint32_t average = static_cast<uint32_t>(absolute_sum / sample_count);
       if (average >= FOLLOWUP_LOUD_AVERAGE_THRESHOLD || peak >= FOLLOWUP_LOUD_PEAK_THRESHOLD) {
         this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
+      }
+      uint32_t previous_average = this->followup_average_seen_.load(std::memory_order_relaxed);
+      if (average > previous_average) {
+        this->followup_average_seen_.store(average, std::memory_order_relaxed);
       }
       uint32_t previous_peak = this->followup_peak_seen_.load(std::memory_order_relaxed);
       if (peak > previous_peak) {
@@ -571,6 +575,7 @@ void VoiceAssistant::loop() {
         this->set_timeout("followup-guard", FOLLOWUP_GUARD_MS, [this]() {
           if (this->state_ == State::FOLLOWUP_DELAY && this->continue_conversation_) {
             this->followup_flush_started_ = 0;
+            this->followup_average_seen_.store(0, std::memory_order_relaxed);
             this->followup_peak_seen_.store(0, std::memory_order_relaxed);
             this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
             this->followup_acoustic_guard_active_.store(true, std::memory_order_release);
@@ -602,10 +607,11 @@ void VoiceAssistant::loop() {
         if (!acoustically_quiet && !guard_expired) {
           break;
         }
+        uint32_t average_seen = this->followup_average_seen_.load(std::memory_order_relaxed);
         uint32_t peak_seen = this->followup_peak_seen_.load(std::memory_order_relaxed);
         ESP_LOGD(TAG, "Follow-up acoustic guard released after %" PRIu32
-                      " ms (%" PRIu32 " ms quiet, peak %" PRIu32 ", forced=%s)",
-                 elapsed, quiet_for, peak_seen, YESNO(guard_expired));
+                      " ms (%" PRIu32 " ms quiet, max avg %" PRIu32 ", peak %" PRIu32 ", forced=%s)",
+                 elapsed, quiet_for, average_seen, peak_seen, YESNO(guard_expired));
         this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
         this->followup_flush_started_ = 0;
         this->clear_buffers_();
@@ -859,6 +865,11 @@ void VoiceAssistant::start_playback_timeout_() {
     timeout_ms = this->tts_estimated_duration_ms_ + PLAYBACK_TIMEOUT_HEADROOM_MS;
   }
 #endif
+  // Component timeouts with the same name are not guaranteed to replace an
+  // already-scheduled callback. The streaming URL can arrive before TTS_START,
+  // so explicitly remove that initial two-second watchdog before applying the
+  // duration-aware timeout.
+  this->cancel_timeout("playing");
   this->set_timeout("playing", timeout_ms, [this]() {
     this->cancel_timeout("speaker-timeout");
     this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
