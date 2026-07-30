@@ -272,6 +272,12 @@ switch:
           id: media_mixing_input
           decibel_reduction: 20
           duration: 0.0s
+      - if:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          then:
+            - micro_wake_word.start:
       # Enable stop wake word
       - micro_wake_word.enable_model: stop
       # Ring timer
@@ -1531,24 +1537,23 @@ script:
                   - micro_wake_word.disable_model: stop
 
   # Starts idle wake word detection according to the selected engine location.
-  # microWakeWord always runs: it detects the wake word on-device in "On device" mode, and
-  # provides the on-device "stop" word during playback/timers in both modes. In "In Home
-  # Assistant" mode the device additionally streams audio continuously so Home Assistant can
-  # detect the wake word.
+  # microWakeWord runs only for on-device detection (and timers, which start it separately).
+  # In "In Home Assistant" mode the device streams audio continuously so Home Assistant can
+  # detect Hey Nova, and keeping a second microphone consumer alive would contaminate
+  # conversational follow-ups with audio captured while Nova is speaking.
   - id: start_idle_wake_word
     # restart mode so a rapid second interaction re-arms cleanly instead of being dropped
     mode: restart
     then:
       - if:
           condition:
-            not:
-              micro_wake_word.is_running:
-          then:
-            - micro_wake_word.start:
-      - if:
-          condition:
             lambda: 'return id(wake_word_engine_location).current_option() == "In Home Assistant";'
           then:
+            - if:
+                condition:
+                  micro_wake_word.is_running:
+                then:
+                  - micro_wake_word.stop:
             - lambda: id(va).set_use_wake_word(true);
             # Wait for the voice assistant to come to rest, then (re)start continuous
             # streaming if it isn't already running. After a "stop"/barge-in/abort the
@@ -1567,6 +1572,12 @@ script:
                 then:
                   - voice_assistant.start_continuous:
           else:
+            - if:
+                condition:
+                  not:
+                    micro_wake_word.is_running:
+                then:
+                  - micro_wake_word.start:
             - lambda: id(va).set_use_wake_word(false);
 
   # Convert a center-button press into a normal VAD Assist turn when idle
@@ -1975,13 +1986,22 @@ select:
                   # On device: stop continuous streaming; microWakeWord (below) does detection
                   - lambda: id(va).set_use_wake_word(false);
                   - voice_assistant.stop:
-            # microWakeWord runs in both modes (on-device detection and/or the "stop" word)
             - if:
                 condition:
-                  not:
-                    micro_wake_word.is_running:
+                  lambda: 'return x == "On device";'
                 then:
-                  - micro_wake_word.start:
+                  - if:
+                      condition:
+                        not:
+                          micro_wake_word.is_running:
+                      then:
+                        - micro_wake_word.start:
+                else:
+                  - if:
+                      condition:
+                        micro_wake_word.is_running:
+                      then:
+                        - micro_wake_word.stop:
 
 voice_assistant:
   id: va
