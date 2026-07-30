@@ -1822,10 +1822,11 @@ voice_kit:
 external_components:
   - source:
       type: git
-      url: https://github.com/esphome/home-assistant-voice-pe
-      ref: dev
+      url: https://github.com/rmacy/home-assistant-voice-pe
+      ref: server-side-nova
     components:
       - voice_kit
+      - voice_assistant
     refresh: 0s
 
 audio_dac:
