@@ -59,6 +59,7 @@ enum class State {
   STREAMING_RESPONSE,
   RESPONSE_FINISHED,
   FOLLOWUP_DELAY,
+  FOLLOWUP_FLUSH,
 };
 
 enum AudioMode : uint8_t {
@@ -328,6 +329,10 @@ class VoiceAssistant : public Component {
   // producing entirely would hang streaming forever. This records when such an imbalance began so a
   // prolonged one can be detected and stopped; 0 means no imbalance is currently being timed.
   uint32_t audio_channel_stall_start_{0};
+
+  // When a shared microphone remains active for another consumer (such as
+  // microWakeWord), discard buffered reply audio before a follow-up pipeline.
+  uint32_t followup_flush_started_{0};
 
   bool use_wake_word_;
   uint8_t noise_suppression_level_;

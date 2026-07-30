@@ -2080,11 +2080,22 @@ voice_assistant:
           # A nonempty x variable means a streaming TTS url was sent to the media player
           lambda: 'return !x.empty();'
         then:
+          # Stop the shared microWakeWord consumer while Nova speaks. Leaving it
+          # active keeps the physical microphone running and can queue Nova's
+          # whole response for the next conversational turn.
+          - if:
+              condition:
+                micro_wake_word.is_running:
+              then:
+                - micro_wake_word.stop:
           - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
           - script.execute: control_leds
-          # Start a script that would potentially enable the stop word if the response is longer than a second
-          - script.execute: activate_stop_word_once
   on_tts_start:
+    - if:
+        condition:
+          micro_wake_word.is_running:
+        then:
+          - micro_wake_word.stop:
     - if:
         condition:
           # The intent_progress trigger didn't start the TTS Reponse
@@ -2092,8 +2103,6 @@ voice_assistant:
         then:
           - lambda: id(voice_assistant_phase) = ${voice_assist_replying_phase_id};
           - script.execute: control_leds
-          # Start a script that would potentially enable the stop word if the response is longer than a second
-          - script.execute: activate_stop_word_once
   # When the voice assistant ends ...
   on_end:
     # Wait for any TTS/announcement to begin, then for it to finish, before resetting.

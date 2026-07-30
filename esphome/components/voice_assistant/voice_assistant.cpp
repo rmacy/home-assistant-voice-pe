@@ -38,6 +38,7 @@ static const uint32_t AUDIO_CHANNEL_STALL_TIMEOUT_MS = 2000;
 // STT. Hold the microphone closed long enough for the measured mixer tail to
 // drain before continuing the conversation.
 static const uint32_t FOLLOWUP_GUARD_MS = 750;
+static const uint32_t FOLLOWUP_FLUSH_MS = 500;
 
 VoiceAssistant::VoiceAssistant() { global_voice_assistant = this; }
 
@@ -522,7 +523,8 @@ void VoiceAssistant::loop() {
         this->set_state_(State::FOLLOWUP_DELAY, State::FOLLOWUP_DELAY);
         this->set_timeout("followup-guard", FOLLOWUP_GUARD_MS, [this]() {
           if (this->state_ == State::FOLLOWUP_DELAY && this->continue_conversation_) {
-            this->set_state_(State::START_MICROPHONE, State::START_PIPELINE);
+            this->followup_flush_started_ = 0;
+            this->set_state_(State::START_MICROPHONE, State::FOLLOWUP_FLUSH);
           }
         });
       } else {
@@ -531,6 +533,20 @@ void VoiceAssistant::loop() {
       break;
     }
     case State::FOLLOWUP_DELAY:
+      break;
+    case State::FOLLOWUP_FLUSH:
+      // The physical microphone can stay active for microWakeWord while the
+      // voice-assistant consumer is stopped. Drain anything accumulated while
+      // Nova was speaking instead of sending it as the next user utterance.
+      this->clear_buffers_();
+      if (this->followup_flush_started_ == 0) {
+        this->followup_flush_started_ = millis();
+        ESP_LOGD(TAG, "Flushing follow-up microphone for %u ms", FOLLOWUP_FLUSH_MS);
+      } else if ((millis() - this->followup_flush_started_) >= FOLLOWUP_FLUSH_MS) {
+        this->followup_flush_started_ = 0;
+        this->clear_buffers_();
+        this->set_state_(State::START_PIPELINE, State::START_PIPELINE);
+      }
       break;
     default:
       break;
@@ -613,6 +629,8 @@ static const LogString *voice_assistant_state_to_string(State state) {
       return LOG_STR("RESPONSE_FINISHED");
     case State::FOLLOWUP_DELAY:
       return LOG_STR("FOLLOWUP_DELAY");
+    case State::FOLLOWUP_FLUSH:
+      return LOG_STR("FOLLOWUP_FLUSH");
     default:
       return LOG_STR("UNKNOWN");
   }
@@ -750,6 +768,10 @@ void VoiceAssistant::request_stop() {
     case State::FOLLOWUP_DELAY:
       this->cancel_timeout("followup-guard");
       this->set_state_(State::IDLE, State::IDLE);
+      break;
+    case State::FOLLOWUP_FLUSH:
+      this->followup_flush_started_ = 0;
+      this->set_state_(State::STOP_MICROPHONE, State::IDLE);
       break;
   }
 }
