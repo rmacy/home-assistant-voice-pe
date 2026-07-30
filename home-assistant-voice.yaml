@@ -1827,6 +1827,7 @@ external_components:
     components:
       - voice_kit
       - voice_assistant
+      - speaker_source
     refresh: 0s
 
 audio_dac:
