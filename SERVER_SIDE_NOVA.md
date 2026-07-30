@@ -27,5 +27,14 @@ recoverable fallback if Home Assistant or the wake-word service is unavailable.
 
 Before OTA flashing, take a full Home Assistant backup and retain the previous
 firmware build artifact. Validate with the device in the same room where it
-will be used, then tune only the server-side model threshold; do not alter the
-device audio pipeline merely to compensate for a weak model.
+will be used. Tune the detector with measured positive and near-miss samples;
+do not raise its threshold merely to conceal a weak model.
+
+Home Assistant Core 2026.7.4 discards ESPHome's advertised microphone
+processing values and supplies no wake-word audio pre-roll in the satellite
+pipeline. The lab compatibility helper
+`lab/homeassistant/patches/patch_esphome_wake_preroll.py` passes those settings
+through and retains 0.6 seconds of audio when wake detection hands the stream
+to STT. This firmware uses noise suppression level 2, neutral automatic gain,
+and a 1x input multiplier. Reapply and validate the Core patch after every
+Home Assistant Core upgrade until upstream provides equivalent behavior.

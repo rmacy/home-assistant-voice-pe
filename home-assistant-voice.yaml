@@ -1991,7 +1991,10 @@ voice_assistant:
   media_player: external_media_player
   micro_wake_word: mww
   use_wake_word: false
-  noise_suppression_level: 0
+  # Moderate filtering reduces HVAC/room-noise false wakes without the speech
+  # damage seen at the maximum setting. Home Assistant receives and applies
+  # this value through the local ESPHome compatibility patch.
+  noise_suppression_level: 2
   auto_gain: 0 dbfs
   volume_multiplier: 1
   on_client_connected:
