@@ -1001,6 +1001,13 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
         this->tts_estimated_duration_ms_ = estimate;
         this->tts_playback_started_at_ = 0;
         ESP_LOGD(TAG, "Estimated TTS playback duration: %" PRIu32 " ms (%zu words)", estimate, word_count);
+        // Streaming playback can be launched by INTENT_PROGRESS before this
+        // event supplies the response text. Replace that provisional two-second
+        // watchdog now that a duration estimate is available.
+        if (this->media_player_response_state_ == MediaPlayerResponseState::URL_SENT ||
+            this->media_player_response_state_ == MediaPlayerResponseState::PLAYING) {
+          this->start_playback_timeout_();
+        }
       }
 #endif
       if (text.length() > 500) {
