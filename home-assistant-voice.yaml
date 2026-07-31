@@ -1580,18 +1580,13 @@ script:
                   - micro_wake_word.start:
             - lambda: id(va).set_use_wake_word(false);
 
-  # Convert a center-button press into a normal VAD Assist turn when idle
-  # streaming is enabled. The stream is stopped first so the one-shot request
-  # cannot race it; return_to_idle restores server-side wake-word streaming.
+  # Convert a center-button press into a normal VAD Assist turn. The vendored
+  # voice_assistant component performs an acknowledged takeover when the idle
+  # server-side wake stream is active, preventing its delayed RUN_END event
+  # from resetting the new manual interaction.
   - id: start_manual_assist
     mode: restart
     then:
-      - voice_assistant.stop:
-      - wait_until:
-          condition:
-            not:
-              voice_assistant.is_running:
-          timeout: 2s
       - lambda: id(va).set_use_wake_word(false);
       - voice_assistant.start:
           silence_detection: true

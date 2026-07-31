@@ -347,6 +347,10 @@ class VoiceAssistant : public Component {
 
   bool continuous_{false};
   bool silence_detection_;
+  // A center-button one-shot request can arrive while the server-side wake
+  // pipeline is streaming. Wait for that pipeline's RUN_END before starting
+  // the manual pipeline so its delayed end event cannot tear down the new run.
+  bool manual_start_pending_{false};
 
   bool continue_conversation_{false};
 

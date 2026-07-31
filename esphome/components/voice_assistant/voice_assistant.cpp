@@ -795,6 +795,30 @@ void VoiceAssistant::request_start(bool continuous, bool silence_detection) {
     this->continuous_ = false;
     return;
   }
+  if (!continuous && this->continuous_ && this->state_ == State::STREAMING_MICROPHONE) {
+    ESP_LOGD(TAG, "Replacing idle continuous pipeline with a manual Assist turn");
+    this->manual_start_pending_ = true;
+    this->continuous_ = false;
+    this->silence_detection_ = silence_detection;
+    this->continue_conversation_ = false;
+    this->conversation_session_active_ = false;
+    this->conversation_session_started_at_ = 0;
+    this->followup_speech_started_ = false;
+    this->last_response_requested_answer_ = false;
+    this->cancel_timeout("followup-listen");
+    this->reset_conversation_id();
+    this->signal_stop_();
+    this->set_state_(State::STOP_MICROPHONE, State::IDLE);
+    this->set_timeout("manual-start-takeover", 5000, [this]() {
+      if (!this->manual_start_pending_) {
+        return;
+      }
+      ESP_LOGW(TAG, "Timed out waiting for idle pipeline to end before manual start");
+      this->manual_start_pending_ = false;
+      this->defer([this]() { this->end_trigger_.trigger(); });
+    });
+    return;
+  }
   if (this->state_ == State::IDLE) {
     this->continuous_ = continuous;
     this->silence_detection_ = silence_detection;
@@ -811,7 +835,9 @@ void VoiceAssistant::request_stop() {
   this->conversation_session_started_at_ = 0;
   this->followup_speech_started_ = false;
   this->last_response_requested_answer_ = false;
+  this->manual_start_pending_ = false;
   this->cancel_timeout("followup-listen");
+  this->cancel_timeout("manual-start-takeover");
 
   switch (this->state_) {
     case State::IDLE:
@@ -1124,6 +1150,13 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     case api::enums::VOICE_ASSISTANT_RUN_END: {
       ESP_LOGD(TAG, "Assist Pipeline ended");
       this->trace_stage_("run-end");
+      if (this->manual_start_pending_) {
+        ESP_LOGD(TAG, "Idle pipeline ended; starting pending manual Assist turn");
+        this->manual_start_pending_ = false;
+        this->cancel_timeout("manual-start-takeover");
+        this->set_state_(State::STOP_MICROPHONE, State::START_PIPELINE);
+        break;
+      }
       if ((this->state_ == State::START_PIPELINE) || (this->state_ == State::STARTING_PIPELINE) ||
           (this->state_ == State::STREAMING_MICROPHONE)) {
         // Microphone is running, stop it
