@@ -1306,6 +1306,11 @@ void VoiceAssistant::timer_tick_() {
 void VoiceAssistant::on_announce(const api::VoiceAssistantAnnounceRequest &msg) {
 #ifdef USE_MEDIA_PLAYER
   if (this->media_player_ != nullptr) {
+    size_t last_non_space = msg.text.find_last_not_of(" \t\r\n");
+    this->last_response_requested_answer_ =
+        last_non_space != std::string::npos && (msg.text[last_non_space] == '?' || msg.text[last_non_space] == ';');
+    this->conversation_session_active_ = msg.start_conversation;
+    this->followup_speech_started_ = false;
     this->tts_start_trigger_.trigger(msg.text);
 
     this->media_player_response_state_ = MediaPlayerResponseState::URL_SENT;
