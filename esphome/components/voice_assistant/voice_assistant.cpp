@@ -43,11 +43,55 @@ static const uint32_t FOLLOWUP_QUIET_MS = 350;
 static const uint32_t FOLLOWUP_MAX_FLUSH_MS = 12000;
 static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 1500;
 static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 10000;
+static const uint32_t FOLLOWUP_ANSWER_WINDOW_MS = 8000;
+static const uint32_t FOLLOWUP_GRACE_WINDOW_MS = 4000;
 
 // If the media player never publishes a useful state transition, wait for the
 // duration inferred from the TTS text plus decoder/startup headroom rather than
 // declaring playback complete after two seconds.
 static const uint32_t PLAYBACK_TIMEOUT_HEADROOM_MS = 1500;
+
+static bool is_conversation_termination_(const std::string &text) {
+  std::string normalized;
+  normalized.reserve(text.size());
+  bool previous_space = true;
+  for (unsigned char character : text) {
+    if ((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z')) {
+      normalized.push_back(
+          static_cast<char>(character >= 'A' && character <= 'Z' ? character + ('a' - 'A') : character));
+      previous_space = false;
+    } else if (!previous_space && !normalized.empty()) {
+      normalized.push_back(' ');
+      previous_space = true;
+    }
+  }
+  if (!normalized.empty() && normalized.back() == ' ') {
+    normalized.pop_back();
+  }
+
+  static const char *const TERMINATION_PHRASES[] = {
+      "stop",
+      "stop listening",
+      "stop talking",
+      "stop talking to me",
+      "goodbye",
+      "bye nova",
+      "never mind",
+      "nevermind",
+      "that s all",
+      "that is all",
+      "end conversation",
+      "end the conversation",
+      "go away",
+      "cancel",
+  };
+  for (const char *phrase : TERMINATION_PHRASES) {
+    if (normalized == phrase) {
+      return true;
+    }
+  }
+  return false;
+}
 
 VoiceAssistant::VoiceAssistant() { global_voice_assistant = this; }
 
@@ -569,11 +613,11 @@ void VoiceAssistant::loop() {
         this->tts_stream_end_trigger_.trigger();
       }
 #endif
-      if (this->continue_conversation_) {
-        ESP_LOGD(TAG, "Waiting %u ms before follow-up listening", FOLLOWUP_GUARD_MS);
+      if (this->conversation_session_active_) {
+        ESP_LOGD(TAG, "Waiting %u ms before conversational follow-up listening", FOLLOWUP_GUARD_MS);
         this->set_state_(State::FOLLOWUP_DELAY, State::FOLLOWUP_DELAY);
         this->set_timeout("followup-guard", FOLLOWUP_GUARD_MS, [this]() {
-          if (this->state_ == State::FOLLOWUP_DELAY && this->continue_conversation_) {
+          if (this->state_ == State::FOLLOWUP_DELAY && this->conversation_session_active_) {
             this->followup_flush_started_ = 0;
             this->followup_average_seen_.store(0, std::memory_order_relaxed);
             this->followup_peak_seen_.store(0, std::memory_order_relaxed);
@@ -615,6 +659,22 @@ void VoiceAssistant::loop() {
         this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
         this->followup_flush_started_ = 0;
         this->clear_buffers_();
+        this->followup_speech_started_ = false;
+        uint32_t followup_window_ms =
+            this->last_response_requested_answer_ ? FOLLOWUP_ANSWER_WINDOW_MS : FOLLOWUP_GRACE_WINDOW_MS;
+        ESP_LOGD(TAG, "Opening %s follow-up window for %" PRIu32 " ms",
+                 this->last_response_requested_answer_ ? "answer" : "grace", followup_window_ms);
+        this->cancel_timeout("followup-listen");
+        this->set_timeout("followup-listen", followup_window_ms, [this]() {
+          if (!this->conversation_session_active_ || this->followup_speech_started_) {
+            return;
+          }
+          ESP_LOGD(TAG, "Conversational follow-up window expired without speech");
+          this->conversation_session_active_ = false;
+          this->continue_conversation_ = false;
+          this->reset_conversation_id();
+          this->request_stop();
+        });
         this->set_state_(State::START_PIPELINE, State::START_PIPELINE);
       }
       break;
@@ -795,6 +855,10 @@ void VoiceAssistant::request_start(bool continuous, bool silence_detection) {
 void VoiceAssistant::request_stop() {
   this->continuous_ = false;
   this->continue_conversation_ = false;
+  this->conversation_session_active_ = false;
+  this->followup_speech_started_ = false;
+  this->last_response_requested_answer_ = false;
+  this->cancel_timeout("followup-listen");
 
   switch (this->state_) {
     case State::IDLE:
@@ -904,6 +968,9 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     case api::enums::VOICE_ASSISTANT_WAKE_WORD_END: {
       ESP_LOGD(TAG, "Wake word detected");
+      this->conversation_session_active_ = true;
+      this->followup_speech_started_ = false;
+      this->last_response_requested_answer_ = false;
       this->defer([this]() { this->wake_word_detected_trigger_.trigger(); });
       break;
     }
@@ -926,6 +993,25 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
         text += "...";
       }
       ESP_LOGD(TAG, "Speech recognised as: \"%s\"", text.c_str());
+      if (is_conversation_termination_(text)) {
+        ESP_LOGD(TAG, "Explicit conversation termination recognised");
+        this->conversation_session_active_ = false;
+        this->continue_conversation_ = false;
+        this->followup_speech_started_ = false;
+        this->cancel_timeout("followup-listen");
+        this->reset_conversation_id();
+        this->defer([this, text]() {
+          this->stt_end_trigger_.trigger(text);
+          this->request_stop();
+        });
+        break;
+      }
+      this->conversation_session_active_ = true;
+      this->followup_speech_started_ = true;
+      this->cancel_timeout("followup-listen");
+      this->cancel_timeout("reset-conversation_id");
+      this->set_timeout("reset-conversation_id", this->conversation_timeout_,
+                        [this]() { this->reset_conversation_id(); });
       this->defer([this, text]() { this->stt_end_trigger_.trigger(text); });
       break;
     }
@@ -979,6 +1065,9 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
         ESP_LOGW(TAG, "No text in TTS_START event");
         return;
       }
+      size_t last_non_space = text.find_last_not_of(" \t\r\n");
+      this->last_response_requested_answer_ =
+          last_non_space != std::string::npos && (text[last_non_space] == '?' || text[last_non_space] == ';');
 #ifdef USE_MEDIA_PLAYER
       if (this->media_player_ != nullptr) {
         size_t word_count = 0;
@@ -1124,6 +1213,8 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     }
     case api::enums::VOICE_ASSISTANT_STT_VAD_START:
       ESP_LOGD(TAG, "Starting STT by VAD");
+      this->followup_speech_started_ = true;
+      this->cancel_timeout("followup-listen");
       this->defer([this]() { this->stt_vad_start_trigger_.trigger(); });
       break;
     case api::enums::VOICE_ASSISTANT_STT_VAD_END:

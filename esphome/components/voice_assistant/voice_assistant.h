@@ -337,6 +337,9 @@ class VoiceAssistant : public Component {
   // When a shared microphone remains active for another consumer (such as
   // microWakeWord), discard buffered reply audio before a follow-up pipeline.
   uint32_t followup_flush_started_{0};
+  bool conversation_session_active_{false};
+  bool followup_speech_started_{false};
+  bool last_response_requested_answer_{false};
   std::atomic<bool> followup_acoustic_guard_active_{false};
   std::atomic<uint32_t> followup_last_loud_at_{0};
   std::atomic<uint32_t> followup_average_seen_{0};
