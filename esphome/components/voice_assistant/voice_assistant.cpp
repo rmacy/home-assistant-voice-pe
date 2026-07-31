@@ -38,7 +38,10 @@ static const uint32_t AUDIO_CHANNEL_STALL_TIMEOUT_MS = 2000;
 // additional fixed/quiet guard created a 600-700 ms deaf interval and dropped
 // users who began their next turn naturally as soon as Nova stopped speaking.
 static const uint32_t FOLLOWUP_ANSWER_WINDOW_MS = 8000;
-static const uint32_t FOLLOWUP_GRACE_WINDOW_MS = 4000;
+// A statement or acknowledgement can still invite another turn. Keep the
+// conversational floor open long enough for a natural pause instead of
+// ending the session while the user is deciding what to say next.
+static const uint32_t FOLLOWUP_GRACE_WINDOW_MS = 8000;
 // A valid user turn renews the short follow-up lease, but never this hard cap.
 // This bounds a runaway/open conversation while allowing genuinely long use.
 static const uint32_t CONVERSATION_SESSION_MAX_MS = 30 * 60 * 1000;
