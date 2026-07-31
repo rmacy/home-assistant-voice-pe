@@ -32,17 +32,11 @@ static const size_t SPEAKER_BUFFER_SIZE = 16 * RECEIVE_SIZE;
 // SEND_BUFFER_SAMPLES (32 ms), so this is far longer than any legitimate gap between chunks.
 static const uint32_t AUDIO_CHANNEL_STALL_TIMEOUT_MS = 2000;
 
-// The media player and decoder state can get ahead of the physical speaker.
-// Start the follow-up microphone only after a short scheduling guard, then
-// discard samples until the room has actually been quiet. This prevents Nova's
-// own last sentence from becoming the next user turn without imposing a long
-// fixed delay on every conversation.
-static const uint32_t FOLLOWUP_GUARD_MS = 250;
-static const uint32_t FOLLOWUP_MIN_FLUSH_MS = 200;
-static const uint32_t FOLLOWUP_QUIET_MS = 350;
-static const uint32_t FOLLOWUP_MAX_FLUSH_MS = 12000;
-static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 1500;
-static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 10000;
+// Playback completion already includes a duration-aware drain, and Home
+// Assistant applies the server-side de-echo and transcript-admission gates.
+// Re-open the microphone immediately after that authoritative boundary. An
+// additional fixed/quiet guard created a 600-700 ms deaf interval and dropped
+// users who began their next turn naturally as soon as Nova stopped speaking.
 static const uint32_t FOLLOWUP_ANSWER_WINDOW_MS = 8000;
 static const uint32_t FOLLOWUP_GRACE_WINDOW_MS = 4000;
 // A valid user turn renews the short follow-up lease, but never this hard cap.
@@ -100,31 +94,6 @@ VoiceAssistant::VoiceAssistant() { global_voice_assistant = this; }
 
 void VoiceAssistant::setup() {
   this->mic_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
-    if (this->followup_acoustic_guard_active_.load(std::memory_order_relaxed) && data.size() >= 2) {
-      uint64_t absolute_sum = 0;
-      uint32_t peak = 0;
-      size_t sample_count = data.size() / 2;
-      for (size_t index = 0; index + 1 < data.size(); index += 2) {
-        int16_t sample = static_cast<int16_t>(static_cast<uint16_t>(data[index]) |
-                                              (static_cast<uint16_t>(data[index + 1]) << 8));
-        uint32_t magnitude = sample < 0 ? static_cast<uint32_t>(-static_cast<int32_t>(sample))
-                                        : static_cast<uint32_t>(sample);
-        absolute_sum += magnitude;
-        peak = std::max(peak, magnitude);
-      }
-      uint32_t average = static_cast<uint32_t>(absolute_sum / sample_count);
-      if (average >= FOLLOWUP_LOUD_AVERAGE_THRESHOLD || peak >= FOLLOWUP_LOUD_PEAK_THRESHOLD) {
-        this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
-      }
-      uint32_t previous_average = this->followup_average_seen_.load(std::memory_order_relaxed);
-      if (average > previous_average) {
-        this->followup_average_seen_.store(average, std::memory_order_relaxed);
-      }
-      uint32_t previous_peak = this->followup_peak_seen_.load(std::memory_order_relaxed);
-      if (peak > previous_peak) {
-        this->followup_peak_seen_.store(peak, std::memory_order_relaxed);
-      }
-    }
     std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = this->ring_buffer_.lock();
     if (temp_ring_buffer != nullptr) {
       temp_ring_buffer->write((void *) data.data(), data.size());
@@ -626,55 +595,10 @@ void VoiceAssistant::loop() {
       }
 #endif
       if (this->conversation_session_active_) {
-        ESP_LOGD(TAG, "Waiting %u ms before conversational follow-up listening", FOLLOWUP_GUARD_MS);
-        this->set_state_(State::FOLLOWUP_DELAY, State::FOLLOWUP_DELAY);
-        this->set_timeout("followup-guard", FOLLOWUP_GUARD_MS, [this]() {
-          if (this->state_ == State::FOLLOWUP_DELAY && this->conversation_session_active_) {
-            this->followup_flush_started_ = 0;
-            this->followup_average_seen_.store(0, std::memory_order_relaxed);
-            this->followup_peak_seen_.store(0, std::memory_order_relaxed);
-            this->followup_last_loud_at_.store(millis(), std::memory_order_relaxed);
-            this->followup_acoustic_guard_active_.store(true, std::memory_order_release);
-            this->set_state_(State::START_MICROPHONE, State::FOLLOWUP_FLUSH);
-          }
-        });
-      } else {
-        this->set_state_(State::IDLE, State::IDLE);
-      }
-      break;
-    }
-    case State::FOLLOWUP_DELAY:
-      break;
-    case State::FOLLOWUP_FLUSH:
-      // The physical microphone can stay active for microWakeWord while the
-      // voice-assistant consumer is stopped. Drain anything accumulated while
-      // Nova was speaking instead of sending it as the next user utterance.
-      this->clear_buffers_();
-      if (this->followup_flush_started_ == 0) {
-        this->followup_flush_started_ = millis();
-        this->followup_last_loud_at_.store(this->followup_flush_started_, std::memory_order_relaxed);
-        ESP_LOGD(TAG, "Waiting for an acoustically quiet follow-up window");
-      } else {
-        uint32_t now = millis();
-        uint32_t elapsed = now - this->followup_flush_started_;
-        uint32_t quiet_for = now - this->followup_last_loud_at_.load(std::memory_order_relaxed);
-        bool acoustically_quiet = elapsed >= FOLLOWUP_MIN_FLUSH_MS && quiet_for >= FOLLOWUP_QUIET_MS;
-        bool guard_expired = elapsed >= FOLLOWUP_MAX_FLUSH_MS;
-        if (!acoustically_quiet && !guard_expired) {
-          break;
-        }
-        uint32_t average_seen = this->followup_average_seen_.load(std::memory_order_relaxed);
-        uint32_t peak_seen = this->followup_peak_seen_.load(std::memory_order_relaxed);
-        ESP_LOGD(TAG, "Follow-up acoustic guard released after %" PRIu32
-                      " ms (%" PRIu32 " ms quiet, max avg %" PRIu32 ", peak %" PRIu32 ", forced=%s)",
-                 elapsed, quiet_for, average_seen, peak_seen, YESNO(guard_expired));
-        this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
-        this->followup_flush_started_ = 0;
-        this->clear_buffers_();
         this->followup_speech_started_ = false;
         uint32_t followup_window_ms =
             this->last_response_requested_answer_ ? FOLLOWUP_ANSWER_WINDOW_MS : FOLLOWUP_GRACE_WINDOW_MS;
-        ESP_LOGD(TAG, "Opening %s follow-up window for %" PRIu32 " ms",
+        ESP_LOGD(TAG, "Opening %s follow-up window immediately for %" PRIu32 " ms",
                  this->last_response_requested_answer_ ? "answer" : "grace", followup_window_ms);
         this->cancel_timeout("followup-listen");
         this->set_timeout("followup-listen", followup_window_ms, [this]() {
@@ -687,8 +611,19 @@ void VoiceAssistant::loop() {
           this->reset_conversation_id();
           this->request_stop();
         });
-        this->set_state_(State::START_PIPELINE, State::START_PIPELINE);
+        // START_MICROPHONE clears the reply-era ring buffer exactly once, then
+        // starts the follow-up pipeline as soon as the microphone is running.
+        // Do not add another flush state here: that discards natural speech
+        // beginning immediately after playback.
+        this->set_state_(State::START_MICROPHONE, State::START_PIPELINE);
+      } else {
+        this->set_state_(State::IDLE, State::IDLE);
       }
+      break;
+    }
+    case State::FOLLOWUP_DELAY:
+      break;
+    case State::FOLLOWUP_FLUSH:
       break;
     default:
       break;
@@ -929,8 +864,6 @@ void VoiceAssistant::request_stop() {
       this->set_state_(State::IDLE, State::IDLE);
       break;
     case State::FOLLOWUP_FLUSH:
-      this->followup_acoustic_guard_active_.store(false, std::memory_order_release);
-      this->followup_flush_started_ = 0;
       this->set_state_(State::STOP_MICROPHONE, State::IDLE);
       break;
   }
