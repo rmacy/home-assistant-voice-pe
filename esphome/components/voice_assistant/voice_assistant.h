@@ -108,7 +108,6 @@ enum class MediaPlayerResponseState {
   IDLE,
   URL_SENT,
   PLAYING,
-  DRAINING,
   FINISHED,
 };
 #endif

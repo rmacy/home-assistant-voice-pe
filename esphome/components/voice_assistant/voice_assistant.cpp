@@ -124,17 +124,12 @@ void VoiceAssistant::setup() {
           break;
         default:
           if (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING) {
-            // The media player's decoder can report idle before all audible
-            // Chatterbox audio reaches the Voice PE speaker. Hold the response
-            // for a conservative duration estimated from the TTS text.
-            uint32_t elapsed = millis() - this->tts_playback_started_at_;
-            if (elapsed >= this->tts_estimated_duration_ms_) {
-              this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
-            } else {
-              this->media_player_response_state_ = MediaPlayerResponseState::DRAINING;
-              ESP_LOGD(TAG, "Announcement decoder ended early; holding for %" PRIu32 " ms",
-                       this->tts_estimated_duration_ms_ - elapsed);
-            }
+            // SpeakerSourceMediaPlayer remains ANNOUNCING until its physical
+            // output callback has consumed every pending frame. Its transition
+            // away from ANNOUNCING is therefore the authoritative acoustic end,
+            // not merely decoder EOF. A second word-count-based hold made the
+            // device deaf for up to several seconds after users heard silence.
+            this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
           }
           break;
       }
@@ -543,12 +538,7 @@ void VoiceAssistant::loop() {
 #endif
 #ifdef USE_MEDIA_PLAYER
       if (this->media_player_ != nullptr) {
-        if (this->media_player_response_state_ == MediaPlayerResponseState::DRAINING &&
-            (millis() - this->tts_playback_started_at_) >= this->tts_estimated_duration_ms_) {
-          this->media_player_response_state_ = MediaPlayerResponseState::FINISHED;
-        }
-        playing = (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING ||
-                   this->media_player_response_state_ == MediaPlayerResponseState::DRAINING);
+        playing = (this->media_player_response_state_ == MediaPlayerResponseState::PLAYING);
 
         if (this->media_player_response_state_ == MediaPlayerResponseState::FINISHED) {
           this->media_player_response_state_ = MediaPlayerResponseState::IDLE;
