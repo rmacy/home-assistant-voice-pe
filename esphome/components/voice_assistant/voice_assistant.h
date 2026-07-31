@@ -338,6 +338,7 @@ class VoiceAssistant : public Component {
   // microWakeWord), discard buffered reply audio before a follow-up pipeline.
   uint32_t followup_flush_started_{0};
   bool conversation_session_active_{false};
+  uint32_t conversation_session_started_at_{0};
   bool followup_speech_started_{false};
   bool last_response_requested_answer_{false};
   std::atomic<bool> followup_acoustic_guard_active_{false};

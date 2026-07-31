@@ -45,6 +45,9 @@ static const uint32_t FOLLOWUP_LOUD_AVERAGE_THRESHOLD = 1500;
 static const uint32_t FOLLOWUP_LOUD_PEAK_THRESHOLD = 10000;
 static const uint32_t FOLLOWUP_ANSWER_WINDOW_MS = 8000;
 static const uint32_t FOLLOWUP_GRACE_WINDOW_MS = 4000;
+// A valid user turn renews the short follow-up lease, but never this hard cap.
+// This bounds a runaway/open conversation while allowing genuinely long use.
+static const uint32_t CONVERSATION_SESSION_MAX_MS = 30 * 60 * 1000;
 
 // If the media player never publishes a useful state transition, wait for the
 // duration inferred from the TTS text plus decoder/startup headroom rather than
@@ -390,6 +393,13 @@ void VoiceAssistant::loop() {
     this->continuous_ = false;
     this->signal_stop_();
     this->clear_buffers_();
+    return;
+  }
+  if (this->conversation_session_active_ &&
+      millis() - this->conversation_session_started_at_ >= CONVERSATION_SESSION_MAX_MS) {
+    ESP_LOGW(TAG, "Conversation reached the 30-minute hard limit");
+    this->reset_conversation_id();
+    this->request_stop();
     return;
   }
   switch (this->state_) {
@@ -856,6 +866,7 @@ void VoiceAssistant::request_stop() {
   this->continuous_ = false;
   this->continue_conversation_ = false;
   this->conversation_session_active_ = false;
+  this->conversation_session_started_at_ = 0;
   this->followup_speech_started_ = false;
   this->last_response_requested_answer_ = false;
   this->cancel_timeout("followup-listen");
@@ -968,6 +979,9 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     case api::enums::VOICE_ASSISTANT_WAKE_WORD_END: {
       ESP_LOGD(TAG, "Wake word detected");
+      if (!this->conversation_session_active_) {
+        this->conversation_session_started_at_ = millis();
+      }
       this->conversation_session_active_ = true;
       this->followup_speech_started_ = false;
       this->last_response_requested_answer_ = false;
@@ -1005,6 +1019,9 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
           this->request_stop();
         });
         break;
+      }
+      if (!this->conversation_session_active_) {
+        this->conversation_session_started_at_ = millis();
       }
       this->conversation_session_active_ = true;
       this->followup_speech_started_ = true;
@@ -1311,6 +1328,11 @@ void VoiceAssistant::on_announce(const api::VoiceAssistantAnnounceRequest &msg) 
     this->last_response_requested_answer_ =
         last_non_space != std::string::npos &&
         (announce_text[last_non_space] == '?' || announce_text[last_non_space] == ';');
+    if (msg.start_conversation && !this->conversation_session_active_) {
+      this->conversation_session_started_at_ = millis();
+    } else if (!msg.start_conversation) {
+      this->conversation_session_started_at_ = 0;
+    }
     this->conversation_session_active_ = msg.start_conversation;
     this->followup_speech_started_ = false;
     this->tts_start_trigger_.trigger(msg.text);
