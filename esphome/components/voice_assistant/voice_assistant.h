@@ -247,6 +247,7 @@ class VoiceAssistant : public Component {
   void set_state_(State state, State desired_state);
   void signal_stop_();
   void start_playback_timeout_();
+  void trace_stage_(const char *stage);
 
   // Drains the exposed microphone audio and sends it to Home Assistant over the API in one loop() pass.
   void stream_api_audio_();
@@ -316,6 +317,7 @@ class VoiceAssistant : public Component {
   bool local_output_{false};
 
   std::string conversation_id_;
+  std::string interaction_trace_id_;
 
   std::string wake_word_;
 

@@ -150,6 +150,7 @@ void VoiceAssistant::setup() {
             // State changed to announcing after receiving the url
             this->media_player_response_state_ = MediaPlayerResponseState::PLAYING;
             this->tts_playback_started_at_ = millis();
+            this->trace_stage_("device-playback-start");
           }
           break;
         default:
@@ -586,6 +587,7 @@ void VoiceAssistant::loop() {
           this->tts_playback_started_at_ = 0;
           this->cancel_timeout("playing");
           ESP_LOGD(TAG, "Announcement finished playing");
+          this->trace_stage_("device-playback-end");
           this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
 
           api::VoiceAssistantAnnounceFinished msg;
@@ -776,11 +778,22 @@ static const LogString *voice_assistant_state_to_string(State state) {
   }
 };
 
+// NOVA_FIRMWARE_TRACE_V1
+void VoiceAssistant::trace_stage_(const char *stage) {
+  if (!this->interaction_trace_id_.empty()) {
+    ESP_LOGD(TAG, "Nova trace=%s stage=%s", this->interaction_trace_id_.c_str(), stage);
+  }
+}
+
 void VoiceAssistant::set_state_(State state) {
   State old_state = this->state_;
   this->state_ = state;
   ESP_LOGD(TAG, "State changed from %s to %s", LOG_STR_ARG(voice_assistant_state_to_string(old_state)),
            LOG_STR_ARG(voice_assistant_state_to_string(state)));
+  if (state == State::IDLE && old_state != State::IDLE) {
+    this->trace_stage_("device-idle");
+    this->interaction_trace_id_.clear();
+  }
 }
 
 void VoiceAssistant::set_state_(State state, State desired_state) {
@@ -863,6 +876,7 @@ void VoiceAssistant::request_start(bool continuous, bool silence_detection) {
 }
 
 void VoiceAssistant::request_stop() {
+  this->trace_stage_("device-cancel-requested");
   this->continuous_ = false;
   this->continue_conversation_ = false;
   this->conversation_session_active_ = false;
@@ -962,9 +976,16 @@ void VoiceAssistant::start_playback_timeout_() {
 
 void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
   ESP_LOGD(TAG, "Event Type: %" PRId32, msg.event_type);
+  for (const auto &arg : msg.data) {
+    if (arg.name == "trace_id" && !arg.value.empty()) {
+      this->interaction_trace_id_ = arg.value;
+      break;
+    }
+  }
   switch (msg.event_type) {
     case api::enums::VOICE_ASSISTANT_RUN_START:
       ESP_LOGD(TAG, "Assist Pipeline running");
+      this->trace_stage_("run-start");
 #ifdef USE_MEDIA_PLAYER
       this->started_streaming_tts_ = false;
       for (const auto &arg : msg.data) {
@@ -979,6 +1000,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     case api::enums::VOICE_ASSISTANT_WAKE_WORD_END: {
       ESP_LOGD(TAG, "Wake word detected");
+      this->trace_stage_("wake-accepted");
       if (!this->conversation_session_active_) {
         this->conversation_session_started_at_ = millis();
       }
@@ -990,9 +1012,11 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     }
     case api::enums::VOICE_ASSISTANT_STT_START:
       ESP_LOGD(TAG, "STT started");
+      this->trace_stage_("stt-start");
       this->defer([this]() { this->listening_trigger_.trigger(); });
       break;
     case api::enums::VOICE_ASSISTANT_STT_END: {
+      this->trace_stage_("stt-accepted");
       std::string text;
       for (const auto &arg : msg.data) {
         if (arg.name == "text") {
@@ -1034,6 +1058,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     }
     case api::enums::VOICE_ASSISTANT_INTENT_START:
       ESP_LOGD(TAG, "Intent started");
+      this->trace_stage_("routing-start");
       this->defer([this]() { this->intent_start_trigger_.trigger(); });
       break;
     case api::enums::VOICE_ASSISTANT_INTENT_PROGRESS: {
@@ -1061,6 +1086,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     }
     case api::enums::VOICE_ASSISTANT_INTENT_END: {
+      this->trace_stage_("routing-end");
       for (const auto &arg : msg.data) {
         if (arg.name == "conversation_id") {
           this->conversation_id_ = arg.value;
@@ -1072,6 +1098,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     }
     case api::enums::VOICE_ASSISTANT_TTS_START: {
+      this->trace_stage_("tts-start");
       std::string text;
       for (const auto &arg : msg.data) {
         if (arg.name == "text") {
@@ -1135,6 +1162,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     }
     case api::enums::VOICE_ASSISTANT_TTS_END: {
+      this->trace_stage_("tts-ready");
       std::string url;
       for (const auto &arg : msg.data) {
         if (arg.name == "url") {
@@ -1169,6 +1197,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     }
     case api::enums::VOICE_ASSISTANT_RUN_END: {
       ESP_LOGD(TAG, "Assist Pipeline ended");
+      this->trace_stage_("run-end");
       if ((this->state_ == State::START_PIPELINE) || (this->state_ == State::STARTING_PIPELINE) ||
           (this->state_ == State::STREAMING_MICROPHONE)) {
         // Microphone is running, stop it
@@ -1181,6 +1210,7 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
       break;
     }
     case api::enums::VOICE_ASSISTANT_ERROR: {
+      this->trace_stage_("error");
       std::string code;
       std::string message;
       for (const auto &arg : msg.data) {
@@ -1230,12 +1260,14 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
     }
     case api::enums::VOICE_ASSISTANT_STT_VAD_START:
       ESP_LOGD(TAG, "Starting STT by VAD");
+      this->trace_stage_("audio-admission-start");
       this->followup_speech_started_ = true;
       this->cancel_timeout("followup-listen");
       this->defer([this]() { this->stt_vad_start_trigger_.trigger(); });
       break;
     case api::enums::VOICE_ASSISTANT_STT_VAD_END:
       ESP_LOGD(TAG, "STT by VAD end");
+      this->trace_stage_("audio-admission-end");
       this->set_state_(State::STOP_MICROPHONE, State::AWAITING_RESPONSE);
       this->defer([this]() { this->stt_vad_end_trigger_.trigger(); });
       break;
