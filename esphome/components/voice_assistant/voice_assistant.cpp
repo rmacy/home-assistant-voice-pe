@@ -859,7 +859,10 @@ void VoiceAssistant::signal_stop_() {
 }
 
 void VoiceAssistant::start_playback_timeout_() {
-  uint32_t timeout_ms = 2000;
+  // Chatterbox can take more than two seconds to deliver its first audio on a
+  // cold or contended request. This is only the provisional URL-to-audio
+  // startup guard; TTS_START replaces it with the duration-aware watchdog.
+  uint32_t timeout_ms = 10000;
 #ifdef USE_MEDIA_PLAYER
   if (this->media_player_ != nullptr && this->tts_estimated_duration_ms_ > 0) {
     timeout_ms = this->tts_estimated_duration_ms_ + PLAYBACK_TIMEOUT_HEADROOM_MS;

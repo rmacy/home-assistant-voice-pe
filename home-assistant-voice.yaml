@@ -2126,13 +2126,24 @@ voice_assistant:
           - script.execute: control_leds
   # When the voice assistant ends ...
   on_end:
-    # Wait for any TTS/announcement to begin, then for it to finish, before resetting.
+    # Home Assistant can send RUN_END just before the deferred TTS_END/media-player
+    # transition reaches the device. Give a reply a real startup window instead
+    # of racing that handoff with the old 500 ms timeout.
     # Note: we cannot wait on `voice_assistant.is_running` here because in streaming mode
     # the voice assistant reports "running" continuously, so that wait would never complete.
-    - wait_until:
+    - if:
         condition:
-          media_player.is_announcing: external_media_player
-        timeout: 0.5s
+          lambda: 'return id(voice_assistant_phase) == ${voice_assist_replying_phase_id};'
+        then:
+          - wait_until:
+              condition:
+                media_player.is_announcing: external_media_player
+              timeout: 5s
+        else:
+          - wait_until:
+              condition:
+                media_player.is_announcing: external_media_player
+              timeout: 0.5s
     - wait_until:
         not:
           media_player.is_announcing: external_media_player
