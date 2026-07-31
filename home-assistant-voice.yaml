@@ -2148,9 +2148,21 @@ voice_assistant:
           lambda: return id(voice_assistant_phase) == ${voice_assist_error_phase_id};
         then:
           - delay: 1s
-    # Un-duck, return to idle, refresh LEDs, and re-arm idle wake word detection (shared with
-    # the interrupt path so normal completion and aborts end up in the same state).
-    - script.execute: return_to_idle
+    # RUN_END precedes physical playback completion. If the firmware opened a
+    # conversational follow-up after that playback, preserve its listening
+    # phase; resetting the LEDs and wake stream here makes the third turn look
+    # closed and races the newly started pipeline. The final RUN_END after
+    # grace expiry, an explicit stop, or a truly terminal response performs the
+    # normal cleanup because the conversation lease is then inactive.
+    - if:
+        condition:
+          lambda: 'return id(va).is_conversation_session_active() && id(va).is_running();'
+        then:
+          - logger.log:
+              level: DEBUG
+              format: "Preserving active conversational follow-up after reply"
+        else:
+          - script.execute: return_to_idle
   on_timer_finished:
     - switch.turn_on: timer_ringing
   on_timer_started:

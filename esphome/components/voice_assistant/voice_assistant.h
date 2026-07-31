@@ -190,6 +190,7 @@ class VoiceAssistant : public Component {
   bool is_running() const { return this->state_ != State::IDLE; }
   void set_continuous(bool continuous) { this->continuous_ = continuous; }
   bool is_continuous() const { return this->continuous_; }
+  bool is_conversation_session_active() const { return this->conversation_session_active_; }
 
   void set_use_wake_word(bool use_wake_word) { this->use_wake_word_ = use_wake_word; }
 
