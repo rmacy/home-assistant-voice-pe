@@ -1686,16 +1686,27 @@ interval:
   # owns the device; this cannot terminate a foreground request.
   - interval: 3s
     then:
+      - script.execute: check_if_timers_active
       - if:
           condition:
             lambda: |-
+              const auto effect_name = id(voice_assistant_leds).get_effect_name();
+              const bool presentation_is_stale =
+                esphome::voice_assistant::is_foreground_voice_effect(effect_name.c_str()) ||
+                esphome::voice_assistant::is_unowned_idle_illumination(
+                  id(voice_assistant_leds).current_values.is_on(),
+                  id(led_ring).current_values.is_on(),
+                  effect_name.c_str(),
+                  id(is_timer_active),
+                  id(master_mute_switch).state ||
+                    id(external_media_player).volume == 0.0f ||
+                    id(external_media_player).is_muted());
               return esphome::voice_assistant::should_reconcile_idle_phase(
                 !id(init_in_progress),
                 id(api_id).is_connected(),
                 id(wake_word_engine_location).current_option() == "In Home Assistant",
                 id(voice_assistant_phase) == ${voice_assist_idle_phase_id},
-                esphome::voice_assistant::is_foreground_voice_effect(
-                  id(voice_assistant_leds).get_effect_name().c_str()),
+                presentation_is_stale,
                 id(va).is_idle_wake_streaming(),
                 id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING,
                 id(timer_ringing).state
