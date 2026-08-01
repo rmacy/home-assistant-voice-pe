@@ -1190,6 +1190,19 @@ void VoiceAssistant::on_event(const api::VoiceAssistantEventResponse &msg) {
         });
         return;
       }
+      // Any remaining error is terminal for the foreground turn. In
+      // particular, stt-no-text-recognized used to stop the microphone while
+      // leaving the private conversation lease active. The deferred RUN_END
+      // cleanup then mistook the failed turn for a live follow-up and
+      // preserved the listening LED phase indefinitely. Revoke the lease
+      // before changing state so on_end always returns the device to idle.
+      this->conversation_session_active_ = false;
+      this->continue_conversation_ = false;
+      this->conversation_session_started_at_ = 0;
+      this->followup_speech_started_ = false;
+      this->last_response_requested_answer_ = false;
+      this->cancel_timeout("followup-listen");
+      this->reset_conversation_id();
       ESP_LOGE(TAG, "Error: %s - %s", code.c_str(), message.c_str());
       if (this->state_ != State::IDLE) {
         this->signal_stop_();
