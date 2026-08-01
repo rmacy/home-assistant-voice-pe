@@ -2041,6 +2041,13 @@ voice_assistant:
   volume_multiplier: 1
   on_client_connected:
     - lambda: id(init_in_progress) = false;
+    # Prewarm the persistent 48 kHz output through its configured resampler.
+    # ESPHome 2026.6.0 can transiently report the I2S parent bus busy on the
+    # first post-reboot start. Absorb that retry with one inaudible 16-bit mono
+    # frame before the server-side wake pipeline becomes user-facing.
+    - speaker.play:
+        id: announcement_resampling_speaker
+        data: [0x00, 0x00]
     - script.execute: start_idle_wake_word
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
