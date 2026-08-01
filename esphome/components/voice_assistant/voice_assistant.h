@@ -5,6 +5,7 @@
 #ifdef USE_VOICE_ASSISTANT
 
 #include "idle_phase_reconcile_policy.h"
+#include "foreground_turn_watchdog_policy.h"
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"

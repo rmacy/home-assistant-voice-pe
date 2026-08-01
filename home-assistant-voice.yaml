@@ -153,6 +153,21 @@ globals:
     type: int
     restore_value: no
     initial_value: ${voice_assist_not_ready_phase_id}
+  # Per-phase watchdog state. This is separate from the conversation lease:
+  # a valid multi-turn session may live for many minutes, but no individual
+  # listening/thinking/reply handoff may spin forever.
+  - id: foreground_phase_watch_last_phase
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: foreground_phase_watch_started_at
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: foreground_phase_watch_timer_valid
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # Global variable tracking if the dial was recently touched.
   - id: dial_touched
     type: bool
@@ -1625,6 +1640,45 @@ script:
       - script.execute: return_to_idle
 
 interval:
+  # Bound every non-idle foreground phase independently. The existing
+  # conversation hard cap bounds the whole multi-turn session; this guard
+  # catches a single device/controller handoff that stalls while Home
+  # Assistant already reports the satellite as idle.
+  - interval: 1s
+    then:
+      - lambda: |-
+          const int current_phase = id(voice_assistant_phase);
+          if (esphome::voice_assistant::foreground_phase_changed(
+                id(foreground_phase_watch_last_phase), current_phase)) {
+            id(foreground_phase_watch_last_phase) = current_phase;
+            id(foreground_phase_watch_started_at) = millis();
+            id(foreground_phase_watch_timer_valid) =
+              current_phase != ${voice_assist_idle_phase_id};
+          } else if (current_phase == ${voice_assist_idle_phase_id}) {
+            id(foreground_phase_watch_timer_valid) = false;
+          }
+      - if:
+          condition:
+            lambda: |-
+              return esphome::voice_assistant::should_abort_stale_foreground_phase(
+                !id(init_in_progress),
+                id(api_id).is_connected(),
+                id(wake_word_engine_location).current_option() == "In Home Assistant",
+                id(voice_assistant_phase) == ${voice_assist_idle_phase_id},
+                id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING,
+                id(timer_ringing).state,
+                id(foreground_phase_watch_timer_valid),
+                millis(),
+                id(foreground_phase_watch_started_at),
+                esphome::voice_assistant::FOREGROUND_PHASE_MAX_MS
+              );
+          then:
+            - lambda: id(foreground_phase_watch_timer_valid) = false;
+            - logger.log:
+                level: ERROR
+                format: "Foreground voice phase exceeded 30 seconds; cancelling and re-arming"
+            - script.execute: interrupt_voice_assistant
+
   # Reconcile presentation with the underlying controller. A terminal edge can
   # leave the YAML LED phase stale even after the C++ assistant has safely
   # returned to its continuous server-side idle wake stream. Re-enter the one
