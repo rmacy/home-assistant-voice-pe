@@ -6,6 +6,7 @@
 
 #include "idle_phase_reconcile_policy.h"
 #include "foreground_turn_watchdog_policy.h"
+#include "voice_client_disconnect_recovery_policy.h"
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"

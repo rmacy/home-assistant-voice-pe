@@ -168,6 +168,17 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # One-shot recovery state for a Home Assistant voice-client disconnect that
+  # fails to resubscribe. It is deliberately not restored across boot, so a
+  # prolonged Home Assistant outage can cause at most one recovery restart.
+  - id: voice_client_disconnect_seen
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: voice_client_disconnected_at
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
   # Global variable tracking if the dial was recently touched.
   - id: dial_touched
     type: bool
@@ -1640,6 +1651,36 @@ script:
       - script.execute: return_to_idle
 
 interval:
+  # Home Assistant can occasionally lose the ESPHome voice subscription while
+  # leaving stale entity state behind. Give normal reconnect logic 30 seconds;
+  # if an observed disconnect remains unresolved, perform one device-only
+  # restart to force a fresh discovery/subscription handshake. Playback and
+  # timers defer recovery, and the non-restored arm flag prevents reboot loops.
+  - interval: 1s
+    then:
+      - script.execute: check_if_timers_active
+      - if:
+          condition:
+            lambda: |-
+              const bool playback_active =
+                id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING ||
+                id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING;
+              return esphome::voice_assistant::should_restart_after_voice_client_disconnect(
+                id(voice_client_disconnect_seen),
+                id(va).get_api_connection() != nullptr,
+                id(wifi_id).is_connected(),
+                playback_active,
+                id(is_timer_active),
+                millis(),
+                id(voice_client_disconnected_at)
+              );
+          then:
+            - lambda: id(voice_client_disconnect_seen) = false;
+            - logger.log:
+                level: ERROR
+                format: "Voice client did not reconnect within 30 seconds; restarting once"
+            - button.press: restart_button
+
   # Bound every non-idle foreground phase independently. The existing
   # conversation hard cap bounds the whole multi-turn session; this guard
   # catches a single device/controller handoff that stalls while Home
@@ -2118,11 +2159,15 @@ voice_assistant:
   auto_gain: 0 dbfs
   volume_multiplier: 1
   on_client_connected:
+    - lambda: id(voice_client_disconnect_seen) = false;
     - lambda: id(init_in_progress) = false;
     - script.execute: start_idle_wake_word
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
   on_client_disconnected:
+    - lambda: |-
+        id(voice_client_disconnect_seen) = true;
+        id(voice_client_disconnected_at) = millis();
     - voice_assistant.stop:
     - lambda: id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
     - script.execute: control_leds
