@@ -1977,6 +1977,7 @@ external_components:
       url: https://github.com/rmacy/esphome
       ref: nova-i2s-retry-2026.6.0
     components:
+      - api
       - i2s_audio
     refresh: 0s
 
