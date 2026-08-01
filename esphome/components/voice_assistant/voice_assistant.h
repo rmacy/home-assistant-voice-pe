@@ -6,6 +6,7 @@
 
 #include "idle_phase_reconcile_policy.h"
 #include "foreground_turn_watchdog_policy.h"
+#include "controller_diagnostic.h"
 #include "voice_client_disconnect_recovery_policy.h"
 
 #include "esphome/core/automation.h"
@@ -192,6 +193,8 @@ class VoiceAssistant : public Component {
   const Configuration &get_configuration();
 
   bool is_running() const { return this->state_ != State::IDLE; }
+  int get_state_id() const { return static_cast<int>(this->state_); }
+  int get_desired_state_id() const { return static_cast<int>(this->desired_state_); }
   void set_continuous(bool continuous) { this->continuous_ = continuous; }
   bool is_continuous() const { return this->continuous_; }
   bool is_conversation_session_active() const { return this->conversation_session_active_; }

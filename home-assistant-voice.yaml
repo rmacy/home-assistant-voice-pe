@@ -1027,6 +1027,34 @@ power_supply:
   - id: led_power
     pin: GPIO45
 
+text_sensor:
+  # Persist a compact state vector in Home Assistant's recorder. This is
+  # intentionally read-only: a rare physical spinner can otherwise disappear
+  # on recovery before the internal controller/effect split is observable.
+  - platform: template
+    id: nova_controller_diagnostic
+    name: "Nova Controller Diagnostic"
+    icon: "mdi:state-machine"
+    entity_category: diagnostic
+    update_interval: 1s
+    lambda: |-
+      const auto effect_name = id(voice_assistant_leds).get_effect_name();
+      return esphome::voice_assistant::format_controller_diagnostic({
+        .phase = id(voice_assistant_phase),
+        .state = id(va).get_state_id(),
+        .desired_state = id(va).get_desired_state_id(),
+        .running = id(va).is_running(),
+        .continuous = id(va).is_continuous(),
+        .conversation_active = id(va).is_conversation_session_active(),
+        .idle_wake_streaming = id(va).is_idle_wake_streaming(),
+        .effect_name = effect_name.c_str(),
+        .voice_led_on = id(voice_assistant_leds).current_values.is_on(),
+        .user_led_on = id(led_ring).current_values.is_on(),
+        .media_state = static_cast<int>(id(external_media_player).state),
+        .timer_ringing = id(timer_ringing).state,
+        .api_connected = id(api_id).is_connected(),
+      });
+
 sensor:
   # The dial. Used to control volume and Hue of the LED ring.
   - platform: rotary_encoder
