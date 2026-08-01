@@ -4,7 +4,7 @@
 
 namespace esphome::voice_assistant {
 
-constexpr uint32_t VOICE_CLIENT_DISCONNECT_RECOVERY_MS = 30000U;
+constexpr uint32_t VOICE_CLIENT_DISCONNECT_RECOVERY_MS = 10000U;
 
 // A transient Home Assistant/API disconnect is expected to reconnect without
 // intervention. If an observed voice-client disconnect remains unresolved,

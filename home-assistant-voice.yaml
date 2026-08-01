@@ -1652,7 +1652,7 @@ script:
 
 interval:
   # Home Assistant can occasionally lose the ESPHome voice subscription while
-  # leaving stale entity state behind. Give normal reconnect logic 30 seconds;
+  # leaving stale entity state behind. Give normal reconnect logic 10 seconds;
   # if an observed disconnect remains unresolved, perform one device-only
   # restart to force a fresh discovery/subscription handshake. Playback and
   # timers defer recovery, and the non-restored arm flag prevents reboot loops.
@@ -1678,7 +1678,7 @@ interval:
             - lambda: id(voice_client_disconnect_seen) = false;
             - logger.log:
                 level: ERROR
-                format: "Voice client did not reconnect within 30 seconds; restarting once"
+                format: "Voice client did not reconnect within 10 seconds; restarting once"
             - button.press: restart_button
 
   # Bound every non-idle foreground phase independently. The existing
