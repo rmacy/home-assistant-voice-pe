@@ -1,4 +1,5 @@
 #include "voice_assistant.h"
+#include "playback_timeout_policy.h"
 #include "esphome/core/defines.h"
 
 #ifdef USE_VOICE_ASSISTANT
@@ -916,6 +917,46 @@ void VoiceAssistant::start_playback_timeout_() {
   this->cancel_timeout("playing");
   this->set_timeout("playing", timeout_ms, [this]() {
     this->cancel_timeout("speaker-timeout");
+
+    bool has_media_player = false;
+    bool url_pending = false;
+#ifdef USE_MEDIA_PLAYER
+    has_media_player = this->media_player_ != nullptr;
+    url_pending = this->media_player_response_state_ == MediaPlayerResponseState::URL_SENT;
+#endif
+    if (classify_playback_timeout(has_media_player, url_pending) == PlaybackTimeoutAction::STARTUP_FAILED) {
+      ESP_LOGE(TAG, "Announcement URL never began playback; ending the conversation safely");
+#ifdef USE_MEDIA_PLAYER
+      this->media_player_->make_call()
+          .set_command(media_player::MEDIA_PLAYER_COMMAND_STOP)
+          .set_announcement(true)
+          .perform();
+      this->media_player_response_state_ = MediaPlayerResponseState::IDLE;
+#endif
+      this->tts_estimated_duration_ms_ = 0;
+      this->tts_playback_started_at_ = 0;
+      this->conversation_session_active_ = false;
+      this->continue_conversation_ = false;
+      this->conversation_session_started_at_ = 0;
+      this->followup_speech_started_ = false;
+      this->last_response_requested_answer_ = false;
+      this->cancel_timeout("followup-listen");
+      this->reset_conversation_id();
+      this->trace_stage_("device-playback-start-failed");
+      this->set_state_(State::IDLE, State::IDLE);
+
+      if (this->api_client_ != nullptr) {
+        api::VoiceAssistantAnnounceFinished msg;
+        msg.success = false;
+        this->api_client_->send_message(msg);
+      }
+      this->defer([this]() {
+        this->error_trigger_.trigger("playback-start-failed", "Nova could not start response audio");
+        this->end_trigger_.trigger();
+      });
+      return;
+    }
+
     this->set_state_(State::RESPONSE_FINISHED, State::RESPONSE_FINISHED);
 
     if (this->api_client_ == nullptr)
