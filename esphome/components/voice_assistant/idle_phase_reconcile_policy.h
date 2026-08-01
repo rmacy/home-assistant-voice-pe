@@ -9,6 +9,16 @@ constexpr bool is_foreground_voice_effect(std::string_view effect_name) {
          effect_name == "Thinking" || effect_name == "Replying" || effect_name == "Error";
 }
 
+// A stale addressable effect can keep rendering after ESPHome has lost its
+// effect name. Treat an unnamed internal light as stale only when neither the
+// user-facing idle light nor another persistent presentation owns the ring.
+constexpr bool is_unowned_idle_illumination(bool internal_led_on, bool idle_led_requested,
+                                            std::string_view effect_name, bool timer_active,
+                                            bool muted_or_silent) {
+  return internal_led_on && !idle_led_requested && effect_name.empty() && !timer_active &&
+         !muted_or_silent;
+}
+
 // The continuous server-side wake pipeline is the device's real idle state.
 // It is safe to reconcile a stale visual phase only when every state-machine
 // signal agrees that no foreground conversation owns the microphone.
