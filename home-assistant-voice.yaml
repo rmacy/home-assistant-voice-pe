@@ -1860,6 +1860,17 @@ external_components:
       - voice_assistant
       - speaker_source
     refresh: 0s
+  # ESPHome 2026.6.0 waits a full second after transient I2S parent-bus
+  # contention, which can outlast a short reply. This version-pinned fork
+  # retries only ESP_ERR_INVALID_STATE after 20 ms and escalates after one
+  # second; all other driver failures keep the upstream one-second backoff.
+  - source:
+      type: git
+      url: https://github.com/rmacy/esphome
+      ref: nova-i2s-retry-2026.6.0
+    components:
+      - i2s_audio
+    refresh: 0s
 
 audio_dac:
   - platform: aic3204
