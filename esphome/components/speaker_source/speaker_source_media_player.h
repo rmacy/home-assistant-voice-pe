@@ -120,6 +120,10 @@ struct PipelineContext {
   // callback.
   std::atomic<uint32_t> pending_frames{0};
 
+  // Set only after the source task has handed real frames to the physical
+  // speaker. Source PLAYING by itself is not evidence that a URL decoded.
+  std::atomic<bool> audio_started{false};
+
   /// @brief Check if this pipeline is configured (has a speaker assigned)
   bool is_configured() const { return this->speaker != nullptr; }
 };

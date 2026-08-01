@@ -1,4 +1,5 @@
 #include "speaker_source_media_player.h"
+#include "announcement_audio_policy.h"
 
 #ifdef USE_ESP32
 
@@ -204,6 +205,7 @@ size_t SpeakerSourceMediaPlayer::handle_media_output_(uint8_t pipeline, media_so
     if (bytes_written > 0) {
       // Track frames sent to speaker for this source
       ps.pending_frames.fetch_add(stream_info.bytes_to_frames(bytes_written), std::memory_order_relaxed);
+      ps.audio_started.store(true, std::memory_order_relaxed);
     }
     return bytes_written;
   }
@@ -259,19 +261,20 @@ void SpeakerSourceMediaPlayer::loop() {
   if (announcement_source != nullptr) {
     media_source::MediaSourceState announcement_state = announcement_source->get_state();
     if (announcement_state != media_source::MediaSourceState::IDLE) {
-      // Announcement is active - announcements take priority and never report PAUSED
-      switch (announcement_state) {
-        case media_source::MediaSourceState::PLAYING:
-        case media_source::MediaSourceState::PAUSED:  // Treat paused announcements as announcing
-          this->state = media_player::MEDIA_PLAYER_STATE_ANNOUNCING;
-          break;
-        case media_source::MediaSourceState::ERROR:
+      bool source_playing = announcement_state == media_source::MediaSourceState::PLAYING ||
+                            announcement_state == media_source::MediaSourceState::PAUSED;
+      bool audio_started = ann_ps.audio_started.load(std::memory_order_relaxed);
+      if (should_report_announcing(source_playing, audio_started)) {
+        // The source is active and has handed real frames to the speaker.
+        this->state = media_player::MEDIA_PLAYER_STATE_ANNOUNCING;
+      } else {
+        if (announcement_state == media_source::MediaSourceState::ERROR) {
           ESP_LOGE(TAG, "Announcement source error");
-          // Fall through to media pipeline state
-          this->state = this->get_source_state_(media_ps.active_source, media_playlist_active, old_state);
-          break;
-        default:
-          break;
+        }
+        // A decoder that enters PLAYING but produces no frames has not begun
+        // an announcement. Keep the externally visible player idle so the
+        // voice assistant's URL watchdog reports failure instead of success.
+        this->state = this->get_source_state_(media_ps.active_source, media_playlist_active, old_state);
       }
     } else {
       // Announcement source is idle, fall through to media pipeline
@@ -364,15 +367,17 @@ bool SpeakerSourceMediaPlayer::try_execute_play_uri_(const std::string &uri, uin
   // Set pending source so handle_media_state_changed_ can recognize it when the source transitions to PLAYING
   ps.pending_source = target_source;
 
+  // Reset playback evidence before play_uri because the source task can start
+  // writing frames immediately from another thread.
+  ps.pending_frames.store(0, std::memory_order_relaxed);
+  ps.audio_started.store(false, std::memory_order_relaxed);
+
   // Speaker is ready, try to play
   if (!target_source->play_uri(uri)) {
     ESP_LOGE(TAG, "Pipeline %u: Failed to play URI: %s", pipeline, uri.c_str());
     ps.pending_source = nullptr;
     this->queue_command_(MediaPlayerControlCommand::PLAYLIST_ADVANCE, pipeline);
   }
-
-  // Reset pending frame counter for this pipeline since we're starting a new source
-  ps.pending_frames.store(0, std::memory_order_relaxed);
 
   return true;  // Remove from queue
 }
