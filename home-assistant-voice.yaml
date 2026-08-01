@@ -2041,6 +2041,14 @@ voice_assistant:
   volume_multiplier: 1
   on_client_connected:
     - lambda: id(init_in_progress) = false;
+    # Start the persistent hardware output with one inaudible 32-bit stereo
+    # frame before the wake pipeline becomes user-facing. ESPHome 2026.6.0 can
+    # transiently report its I2S parent bus busy on the first post-reboot start;
+    # absorbing that retry here prevents a short first reply from finishing
+    # before the DAC is ready. `timeout: never` keeps the output warm afterward.
+    - speaker.play:
+        id: i2s_audio_speaker
+        data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     - script.execute: start_idle_wake_word
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
