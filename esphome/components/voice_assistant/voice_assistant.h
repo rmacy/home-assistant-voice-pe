@@ -4,6 +4,8 @@
 
 #ifdef USE_VOICE_ASSISTANT
 
+#include "idle_phase_reconcile_policy.h"
+
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
@@ -191,6 +193,11 @@ class VoiceAssistant : public Component {
   void set_continuous(bool continuous) { this->continuous_ = continuous; }
   bool is_continuous() const { return this->continuous_; }
   bool is_conversation_session_active() const { return this->conversation_session_active_; }
+  bool is_idle_wake_streaming() const {
+    return is_idle_wake_stream_state(this->state_ == State::STREAMING_MICROPHONE,
+                                     this->desired_state_ == State::STREAMING_MICROPHONE, this->continuous_,
+                                     this->use_wake_word_, this->conversation_session_active_);
+  }
 
   void set_use_wake_word(bool use_wake_word) { this->use_wake_word_ = use_wake_word; }
 

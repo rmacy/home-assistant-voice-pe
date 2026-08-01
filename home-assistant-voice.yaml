@@ -1625,6 +1625,31 @@ script:
       - script.execute: return_to_idle
 
 interval:
+  # Reconcile presentation with the underlying controller. A terminal edge can
+  # leave the YAML LED phase stale even after the C++ assistant has safely
+  # returned to its continuous server-side idle wake stream. Re-enter the one
+  # idempotent cleanup path only when no conversation, announcement, or timer
+  # owns the device; this cannot terminate a foreground request.
+  - interval: 3s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return esphome::voice_assistant::should_reconcile_idle_phase(
+                !id(init_in_progress),
+                id(api_id).is_connected(),
+                id(wake_word_engine_location).current_option() == "In Home Assistant",
+                id(voice_assistant_phase) == ${voice_assist_idle_phase_id},
+                id(va).is_idle_wake_streaming(),
+                id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING,
+                id(timer_ringing).state
+              );
+          then:
+            - logger.log:
+                level: WARN
+                format: "Reconciling stale voice-assistant LED phase to idle"
+            - script.execute: return_to_idle
+
   # Self-healing re-arm for streaming mode. If we are in "In Home Assistant" mode, connected to
   # Home Assistant, idle, and the voice assistant is not running (continuous streaming dropped
   # for any reason), restart it. return_to_idle re-arms immediately in the normal cases; this is
