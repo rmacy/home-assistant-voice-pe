@@ -1220,7 +1220,7 @@ script:
       - lambda: |-
           auto call = id(voice_assistant_leds).make_call();
           call.set_state(false);
-          call.set_effect(uint32_t{0});
+          call.set_effect(0);
           call.perform();
       - if:
           condition:
