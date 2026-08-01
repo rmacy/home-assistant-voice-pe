@@ -1694,6 +1694,8 @@ interval:
                 id(api_id).is_connected(),
                 id(wake_word_engine_location).current_option() == "In Home Assistant",
                 id(voice_assistant_phase) == ${voice_assist_idle_phase_id},
+                esphome::voice_assistant::is_foreground_voice_effect(
+                  id(voice_assistant_leds).get_effect_name().c_str()),
                 id(va).is_idle_wake_streaming(),
                 id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING,
                 id(timer_ringing).state
