@@ -1214,14 +1214,7 @@ script:
   # Nothing (Either LED ring off or LED ring on if the user decided to turn the user facing LED ring on)
   - id: control_leds_voice_assistant_idle_phase
     then:
-      # A plain light.turn_off does not stop an active ESPHome addressable
-      # effect. Stop the effect explicitly before committing the off frame so
-      # a completed/cancelled turn cannot leave the physical ring spinning.
-      - lambda: |-
-          auto call = id(voice_assistant_leds).make_call();
-          call.set_state(false);
-          call.set_effect(0);
-          call.perform();
+      - light.turn_off: voice_assistant_leds
       - if:
           condition:
             light.is_on: led_ring
