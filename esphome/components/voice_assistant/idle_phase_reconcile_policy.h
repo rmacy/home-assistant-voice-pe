@@ -35,4 +35,17 @@ constexpr bool should_reconcile_idle_phase(bool initialized, bool api_connected,
          !timer_ringing;
 }
 
+// Stopping an addressable effect and committing its off state happen on
+// separate component-loop edges. If the effect writes one final frame between
+// those edges, LightState can correctly report off/effect-inactive while the
+// physical strip retains that last frame. Permit one delayed black-frame
+// commit only when every independent presentation owner still agrees on idle.
+constexpr bool should_commit_idle_black_frame(bool initialized, bool api_connected, bool server_wake_selected,
+                                              bool phase_is_idle, bool idle_wake_streaming, bool voice_light_on,
+                                              bool voice_effect_active, bool user_light_on, bool media_announcing,
+                                              bool timer_active) {
+  return initialized && api_connected && server_wake_selected && phase_is_idle && idle_wake_streaming &&
+         !voice_light_on && !voice_effect_active && !user_light_on && !media_announcing && !timer_active;
+}
+
 }  // namespace esphome::voice_assistant

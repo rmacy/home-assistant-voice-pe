@@ -1251,6 +1251,40 @@ script:
             light.is_on: led_ring
           then:
             light.turn_on: led_ring
+      - script.execute: commit_idle_black_frame
+
+  # Addressable effects and LightState update on separate loop edges. Re-send
+  # one black hardware frame after the effect has had time to stop, but only if
+  # the complete controller/presentation state still proves that nobody owns
+  # the ring. A new turn, user LED request, timer, or announcement cancels the
+  # commit through the guard below.
+  - id: commit_idle_black_frame
+    mode: restart
+    then:
+      - delay: 250ms
+      - script.execute: check_if_timers_active
+      - if:
+          condition:
+            lambda: |-
+              auto *output = static_cast<light::AddressableLight *>(
+                id(voice_assistant_leds).get_output());
+              return esphome::voice_assistant::should_commit_idle_black_frame(
+                !id(init_in_progress),
+                id(api_id).is_connected(),
+                id(wake_word_engine_location).current_option() == "In Home Assistant",
+                id(voice_assistant_phase) == ${voice_assist_idle_phase_id},
+                id(va).is_idle_wake_streaming(),
+                id(voice_assistant_leds).current_values.is_on(),
+                output->is_effect_active(),
+                id(led_ring).current_values.is_on(),
+                id(external_media_player).state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING,
+                id(is_timer_active));
+          then:
+            - lambda: |-
+                auto *output = static_cast<light::AddressableLight *>(
+                  id(voice_assistant_leds).get_output());
+                output->all() = Color::BLACK;
+                output->schedule_show();
 
   # Script executed when the voice assistant is waiting for a command (After the wake word)
   # Slow clockwise spin of the LED ring.
