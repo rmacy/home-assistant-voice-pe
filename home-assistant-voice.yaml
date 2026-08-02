@@ -1048,6 +1048,9 @@ text_sensor:
         .conversation_active = id(va).is_conversation_session_active(),
         .idle_wake_streaming = id(va).is_idle_wake_streaming(),
         .effect_name = effect_name.c_str(),
+        .voice_output_effect_active = static_cast<light::AddressableLight *>(
+          id(voice_assistant_leds).get_output())->is_effect_active(),
+        .animation_index = id(global_led_animation_index),
         .voice_led_on = id(voice_assistant_leds).current_values.is_on(),
         .user_led_on = id(led_ring).current_values.is_on(),
         .media_state = static_cast<int>(id(external_media_player).state),
